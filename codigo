@@ -1,0 +1,82 @@
+ ;/usr/bin/env ;;
+"""Monitor de rede simples: verifica dispositivos por TCP e gera alertas.
+
+Uso: python3 monitor_rede.py
+Pare com Ctrl+C. Só usa a biblioteca padrão do Python (3.8+).
+"""
+import socket
+import time
+import logging
+from datetime import datetime
+
+# ---------- Configuração (edite aqui) ----------
+INTERVALO = 30            # segundos entre cada rodada de verificação
+TIMEOUT = 3               # segundos de espera antes de contar como falha
+FALHAS_PARA_ALERTA = 3    # falhas seguidas até disparar o alerta
+ARQUIVO_LOG = "monitor_rede.log"
+
+DISPOSITIVOS = [
+    {"nome": "Roteador", "host": "192.168.0.1", "porta": 80},
+    {"nome": "DNS Google", "host": "8.8.8.8", "porta": 53},
+    {"nome": "Site de teste", "host": "example.com", "porta": 443},
+]
+# ------------------------------------------------
+
+logging.basicConfig(
+    filename=ARQUIVO_LOG,
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s",
+)
+
+
+def verificar(host, porta):
+    """Tenta abrir uma conexão TCP. Retorna (ok, latencia_em_ms)."""
+    inicio = time.time()
+    try:
+        with socket.create_connection((host, porta), timeout=TIMEOUT):
+            return True, round((time.time() - inicio) * 1000)
+    except OSError:
+        return False, None
+
+
+def enviar_alerta(mensagem):
+    """Ponto único de alerta. Hoje imprime e grava no log.
+    Para e-mail, Telegram ou Slack, troque o corpo desta função."""
+    print(f"[ALERTA] {mensagem}")
+    logging.warning(mensagem)
+
+
+def main():
+    estado = {
+        d["nome"]: {"falhas": 0, "fora": False} for d in DISPOSITIVOS
+    }
+    print(f"Monitorando {len(DISPOSITIVOS)} dispositivos a cada {INTERVALO}s. Ctrl+C para sair.")
+
+    try:
+        while True:
+            hora = datetime.now().strftime("%H:%M:%S")
+            for d in DISPOSITIVOS:
+                nome = d["nome"]
+                ok, ms = verificar(d["host"], d["porta"])
+                e = estado[nome]
+
+                if ok:
+                    print(f"{hora}  {nome:<15} OK   {ms} ms")
+                    logging.info("%s ok %s ms", nome, ms)
+                    if e["fora"]:
+                        enviar_alerta(f"{nome} voltou a responder.")
+                    e["falhas"], e["fora"] = 0, False
+                else:
+                    e["falhas"] += 1
+                    print(f"{hora}  {nome:<15} FALHA ({e['falhas']}/{FALHAS_PARA_ALERTA})")
+                    logging.info("%s falha %s", nome, e["falhas"])
+                    if e["falhas"] >= FALHAS_PARA_ALERTA and not e["fora"]:
+                        e["fora"] = True
+                        enviar_alerta(f"{nome} ({d['host']}:{d['porta']}) está fora do ar.")
+            time.sleep(INTERVALO)
+    except KeyboardInterrupt:
+        print("\nMonitor encerrado.")
+
+
+if __name__ == "__main__":
+    main()
